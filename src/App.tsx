@@ -17,6 +17,7 @@ import safe1 from './assets/safe1.jpg';
 import safe2 from './assets/safe2.jpeg';
 import './App.css';
 import vid from './assets/vid/Safety-vid.mp4';
+import { Link } from 'react-router-dom';
 
 function App() {
   const [percentage, setPercentage] = useState(0);
@@ -454,7 +455,6 @@ function App() {
 function NavLink({ icon, text, to }: { icon: React.ReactNode; text: string; to: string }) {
   return (
     <motion.a
-      href={to}
       className="flex items-center space-x-2 text-gray-700 hover:text-rose-500 transition-all duration-300 px-4 py-2 rounded-full hover:bg-rose-50 w-full md:w-auto"
       // Initial state
       initial={{
@@ -486,8 +486,10 @@ function NavLink({ icon, text, to }: { icon: React.ReactNode; text: string; to: 
       // Add perspective for better 3D effect
       style={{ perspective: 1000 }}
     >
-      {icon}
-      <span className="font-medium text-base">{text}</span>
+      <Link to={to} className="flex items-center space-x-2 w-full">
+        {icon}
+        <span className="font-medium text-base">{text}</span>
+      </Link>
     </motion.a>
   );
 }
