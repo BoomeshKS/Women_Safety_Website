@@ -741,7 +741,7 @@
 /* Styling for Welcome Page new elements */
 .name-input {
   width: 100%;
-  /* max-width: 300px; */
+  max-width: 300px;
   padding: 10px 15px;
   margin: 10px 0;
   border: 2px solid #4682B4;
@@ -757,15 +757,15 @@
   box-shadow: 0 0 8px rgba(255, 105, 180, 0.3);
 }
 
-.wel{
+/* .wel{
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-}
+} */
 
 .role-select {
   width: 100%;
-  /* max-width: 300px; */
+  max-width: 300px;
   padding: 10px 15px;
   margin: 10px 0;
   border: 2px solid #4682B4;
@@ -859,10 +859,7 @@
     margin: 0 auto;
     margin-bottom: 12px;
   }
-  .wel{
-    display: flex;
-  }
-  
+
   .coord-input[type="text"] {
     max-width: 150px;
   }
