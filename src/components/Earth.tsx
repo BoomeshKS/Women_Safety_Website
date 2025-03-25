@@ -21,9 +21,9 @@ export function Earth() {
 
   return (
     <group>
-      {/* Earth */}
+      {/* Earth - Reduced size from 2 to 1.5 */}
       <mesh ref={earthRef}>
-        <sphereGeometry args={[2, 64, 64]} />
+        <sphereGeometry args={[1.5, 64, 64]} />
         <meshPhongMaterial
           map={colorMap}
           normalMap={normalMap}
@@ -32,9 +32,9 @@ export function Earth() {
         />
       </mesh>
       
-      {/* Clouds */}
+      {/* Clouds - Adjusted proportionally */}
       <mesh>
-        <sphereGeometry args={[2.005, 64, 64]} />
+        <sphereGeometry args={[1.505, 64, 64]} />
         <meshPhongMaterial
           map={cloudsMap}
           transparent={true}
@@ -42,9 +42,9 @@ export function Earth() {
         />
       </mesh>
 
-      {/* Atmosphere */}
+      {/* Atmosphere - Adjusted proportionally */}
       <mesh>
-        <sphereGeometry args={[2.1, 64, 64]} />
+        <sphereGeometry args={[1.55, 64, 64]} />
         <meshPhongMaterial
           color={new THREE.Color(0x4444ff)}
           transparent={true}

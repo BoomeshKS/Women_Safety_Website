@@ -3,6 +3,7 @@
   clip-path: polygon(50% 0%, 100% 100%, 100% 0%);
 }
 
+
 /* Text Reveal Animation */
 @keyframes textReveal {
   0% { opacity: 0; transform: translateY(30px); }
@@ -28,9 +29,10 @@
 }
 
 
+
 @media (max-width: 768px) {
   nav {
-    padding: 0 1rem;
+    padding: 0 2rem;
   }
   
   .mobile-menu {
@@ -43,3 +45,4 @@
     max-height: 100px;
   }
 }
+

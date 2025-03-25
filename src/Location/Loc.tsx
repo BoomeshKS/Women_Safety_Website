@@ -1,151 +1,88 @@
-
 import { useState, useEffect, useRef } from "react";
-import { Shield, AlertCircle, Info, CheckCircle, Search, Volume2, Map, RefreshCw } from "lucide-react";
+import { Shield, AlertCircle, Info, Search, Map, RefreshCw } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import "leaflet-routing-machine/dist/leaflet-routing-machine.css";
 import "leaflet-routing-machine";
+import "leaflet-routing-machine/dist/leaflet-routing-machine.css";
 import "./Loc.css";
+import { useNavigate } from "react-router-dom";
 
 function useLiveLocation() {
   const [location, setLocation] = useState(null);
-  const [locationDetails, setLocationDetails] = useState({ fullAddress: "Loading...", details: {} });
-  const [status, setStatus] = useState("Detecting your live location...");
-  const watchIdRef = useRef(null);
-  const retryCountRef = useRef(0);
-  const MAX_RETRIES = 10;
+  const [locationDetails, setLocationDetails] = useState({ fullAddress: "Loading..." });
+  const [status, setStatus] = useState("Detecting your location...");
 
-  const getLocationDetails = async (lat, lng) => {
+  const getLocationDetails = async (lat: unknown, lng: unknown) => {
     try {
       const response = await fetch(
         `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
       );
       const data = await response.json();
-      console.log("OSM Location details:", data);
-      return {
-        fullAddress: data.display_name || "Address not available",
-        details: data.address || {},
-      };
+      return data.display_name || "Address not available";
     } catch (error) {
-      console.error("Error fetching OSM location details:", error);
-      return { fullAddress: "Location details not available", details: {} };
+      console.error("Error fetching location details:", error);
+      return "Location details not available";
     }
   };
 
-  const updateLocation = async (position) => {
-    const newLocation = {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-      accuracy: position.coords.accuracy,
-      timestamp: position.timestamp,
-    };
-    
-    console.log("Detected live location:", newLocation);
-    setLocation(newLocation);
-    localStorage.setItem('lastKnownLocation', JSON.stringify(newLocation));
-    const details = await getLocationDetails(newLocation.lat, newLocation.lng);
-    setLocationDetails(details);
-    setStatus(`Live location acquired (Accuracy: ${Math.round(newLocation.accuracy)}m)`);
-    retryCountRef.current = 0;
-  };
-
-  const handleError = (error) => {
-    if (retryCountRef.current < MAX_RETRIES) {
-      setStatus(`Retrying location detection... (Attempt ${retryCountRef.current + 1}/${MAX_RETRIES})`);
-      retryCountRef.current += 1;
-      setTimeout(requestLocation, 3000);
-    } else {
-      setStatus(`Failed to detect live location: ${error.message}. Using last known position if available.`);
-      const lastKnown = localStorage.getItem('lastKnownLocation');
-      if (lastKnown) {
-        const parsedLocation = JSON.parse(lastKnown);
-        console.log("Using last known location:", parsedLocation);
-        setLocation(parsedLocation);
-        getLocationDetails(parsedLocation.lat, parsedLocation.lng).then(setLocationDetails);
-      } else {
-        setStatus("Unable to detect location. Please enable location services.");
-        setLocation(null);
-      }
-    }
-  };
-
-  const requestLocation = () => {
+  const updateLocation = async () => {
     if (!navigator.geolocation) {
       setStatus("Geolocation not supported by your browser");
-      setLocation(null);
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      updateLocation,
-      handleError,
-      {
-        enableHighAccuracy: true,
-        timeout: 30000,
-        maximumAge: 0,
-      }
-    );
+    try {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 3000,
+          maximumAge: 0,
+        });
+      });
 
-    if (watchIdRef.current) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
+      const newLocation = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      };
+
+      setLocation(newLocation);
+      localStorage.setItem('lastKnownLocation', JSON.stringify(newLocation));
+      const address = await getLocationDetails(newLocation.lat, newLocation.lng);
+      setLocationDetails({ fullAddress: address });
+      setStatus(`Location acquired (Accuracy: ${Math.round(newLocation.accuracy)}m)`);
+    } catch (error) {
+      setStatus(`Failed to detect location: ${error.message}`);
+      const lastKnown = JSON.parse(localStorage.getItem('lastKnownLocation'));
+      if (lastKnown) {
+        setLocation(lastKnown);
+        const address = await getLocationDetails(lastKnown.lat, lastKnown.lng);
+        setLocationDetails({ fullAddress: address });
+      }
     }
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      updateLocation,
-      handleError,
-      {
-        enableHighAccuracy: true,
-        timeout: 30000,
-        maximumAge: 0,
-      }
-    );
   };
 
   useEffect(() => {
-    requestLocation();
-    return () => {
-      if (watchIdRef.current) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
-    };
+    updateLocation();
   }, []);
 
-  return { location, locationDetails, status, refreshLocation: requestLocation };
+  return { location, locationDetails, status, refreshLocation: updateLocation, setLocation, setLocationDetails };
 }
 
-function MapComponent({ userLocation, manualLocation, policeStations, setPoliceStations, setPlaceDetails, refreshTriggered }) {
+function MapComponent({ userLocation, policeStations, setPoliceStations, manualLocation, daughterLocation, setDaughterLocation }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const routingControlsRef = useRef([]);
-  const zoneLayerRef = useRef(null);
-  const userMarkerRef = useRef(null);
-  const nearestPoliceMarkerRef = useRef(null);
-  const nearestRedZoneMarkerRef = useRef(null);
+  const [mapView, setMapView] = useState('street');
 
-  const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-  };
-
-  const getPlaceDetails = async (lat, lng) => {
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
-      );
-      const data = await response.json();
-      return {
-        fullAddress: data.display_name || "Address not available",
-        details: data.address || {},
-      };
-    } catch (error) {
-      console.error("Error fetching OSM place details:", error);
-      return { fullAddress: "Details not available", details: {} };
-    }
+  const safetyZones = {
+    redZones: [
+      { center: [userLocation?.lat + 0.01 || 0, userLocation?.lng + 0.01 || 0], radius: 500 },
+      { center: [userLocation?.lat - 0.01 || 0, userLocation?.lng - 0.01 || 0], radius: 300 },
+    ],
+    blueZones: [
+      { center: [userLocation?.lat + 0.005 || 0, userLocation?.lng + 0.005 || 0], radius: 400 },
+      { center: [userLocation?.lat - 0.005 || 0, userLocation?.lng - 0.005 || 0], radius: 600 },
+    ]
   };
 
   const fetchPoliceStations = async (lat, lng) => {
@@ -154,385 +91,504 @@ function MapComponent({ userLocation, manualLocation, policeStations, setPoliceS
         `https://overpass-api.de/api/interpreter?data=[out:json];(node["amenity"="police"](around:10000,${lat},${lng});way["amenity"="police"](around:10000,${lat},${lng}););out center;`
       );
       const data = await response.json();
-      return data.elements
-        .map((element) => ({
+      if (data.elements && data.elements.length > 0) {
+        return data.elements.map(element => ({
           lat: element.lat || element.center.lat,
           lng: element.lon || element.center.lon,
           name: element.tags?.name || "Police Station",
-          distance: calculateDistance(lat, lng, element.lat || element.center.lat, element.lon || element.center.lon),
-          phone: element.tags?.phone || "Not available",
           address: element.tags?.["addr:full"] || "Address not available",
-        }))
-        .sort((a, b) => a.distance - b.distance);
+          distance: L.latLng(lat, lng).distanceTo([element.lat || element.center.lat, element.lon || element.center.lon]) / 1000
+        })).sort((a, b) => a.distance - b.distance);
+      }
+      
+      const widerResponse = await fetch(
+        `https://overpass-api.de/api/interpreter?data=[out:json];(node["amenity"="police"](around:30000,${lat},${lng});way["amenity"="police"](around:30000,${lat},${lng}););out center;`
+      );
+      const widerData = await widerResponse.json();
+      return widerData.elements.map(element => ({
+        lat: element.lat || element.center.lat,
+        lng: element.lon || element.center.lon,
+        name: element.tags?.name || "Police Station",
+        address: element.tags?.["addr:full"] || "Address not available",
+        distance: L.latLng(lat, lng).distanceTo([element.lat || element.center.lat, element.lon || element.center.lon]) / 1000
+      })).sort((a, b) => a.distance - b.distance);
     } catch (error) {
       console.error("Error fetching police stations:", error);
       return [];
     }
   };
 
-  const fetchRedZones = async (lat, lng) => {
-    try {
-      const response = await fetch(
-        `https://overpass-api.de/api/interpreter?data=[out:json];(way["landuse"="industrial"](around:5000,${lat},${lng});way["highway"~"track|path"](around:5000,${lat},${lng}););out center;`
-      );
-      const data = await response.json();
-      return data.elements
-        .map((element) => ({
-          lat: element.center.lat,
-          lng: element.center.lon,
-          type: element.tags?.landuse || element.tags?.highway,
-          distance: calculateDistance(lat, lng, element.center.lat, element.center.lon),
-        }))
-        .sort((a, b) => a.distance - b.distance);
-    } catch (error) {
-      console.error("Error fetching red zones:", error);
-      return [];
-    }
-  };
-
   useEffect(() => {
-    if (!mapRef.current || (!userLocation && !manualLocation)) return;
+    if (!mapRef.current || !userLocation) return;
 
     if (!mapInstanceRef.current) {
       mapInstanceRef.current = L.map(mapRef.current, {
-        center: userLocation ? [userLocation.lat, userLocation.lng] : [manualLocation.lat, manualLocation.lng],
+        center: [userLocation.lat, userLocation.lng],
         zoom: 14,
-        maxZoom: 22,
-        minZoom: 3,
         scrollWheelZoom: true,
-        dragging: true,
-        doubleClickZoom: true,
-        boxZoom: true,
-        keyboard: true,
-        zoomControl: true,
       });
 
-      const osmLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        maxZoom: 22,
+        maxZoom: 19,
       });
 
-      const satelliteLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-        attribution: '© <a href="https://www.esri.com/">Esri</a>, USGS, NOAA',
-        maxZoom: 22,
+      const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: '© <a href="https://www.esri.com/">Esri</a>',
+        maxZoom: 19,
       });
 
-      const baseLayers = {
-        "OpenStreetMap": osmLayer,
-        "Satellite": satelliteLayer,
-      };
-
-      osmLayer.addTo(mapInstanceRef.current);
-      L.control.layers(baseLayers).addTo(mapInstanceRef.current);
-      zoneLayerRef.current = L.layerGroup().addTo(mapInstanceRef.current);
-    }
-
-    const map = mapInstanceRef.current;
-    const zoneLayer = zoneLayerRef.current;
-
-    const updateMap = async (centerLat, centerLng, isManual = false) => {
-      routingControlsRef.current.forEach((control) => map.removeControl(control));
-      routingControlsRef.current = [];
-      zoneLayer.clearLayers();
-
-      if (userMarkerRef.current) userMarkerRef.current.remove();
-      if (nearestPoliceMarkerRef.current) nearestPoliceMarkerRef.current.remove();
-      if (nearestRedZoneMarkerRef.current) nearestRedZoneMarkerRef.current.remove();
-
-      map.setView([centerLat, centerLng], 14);
-      
-      userMarkerRef.current = L.marker([centerLat, centerLng], {
-        icon: L.divIcon({
-          className: isManual ? "manual-marker" : "user-marker",
-          html: `<div style="color: ${isManual ? '#d81b60' : '#ff4444'}; font-size: 28px;">${isManual ? '⭐' : '📍'}</div>`,
-        }),
-      }).addTo(map);
-
-      L.circle([centerLat, centerLng], {
-        radius: 100,
-        color: isManual ? '#d81b60' : '#ff4444',
-        fillColor: isManual ? '#d81b60' : '#ff4444',
-        fillOpacity: 0.2,
-      }).addTo(zoneLayer);
-
-      userMarkerRef.current.bindPopup(isManual ? "Searched Location" : "Your Live Location").openPopup();
-
-      const placeDetails = await getPlaceDetails(centerLat, centerLng);
-      setPlaceDetails(placeDetails);
-
-      const stations = await fetchPoliceStations(centerLat, centerLng);
-      setPoliceStations(stations);
-
-      if (stations.length > 0) {
-        const nearestStation = stations[0];
-        nearestPoliceMarkerRef.current = L.marker([nearestStation.lat, nearestStation.lng], {
-          icon: L.divIcon({
-            className: "police-marker",
-            html: '<div style="color: #0288d1; font-size: 28px;">👮</div>',
-          }),
-        }).addTo(map);
-
-        L.circle([nearestStation.lat, nearestStation.lng], {
-          radius: 200,
-          color: '#0288d1',
-          fillColor: '#0288d1',
-          fillOpacity: 0.2,
-        }).addTo(zoneLayer);
-
-        nearestPoliceMarkerRef.current.bindPopup(
-          `<strong>Nearest Police Station</strong><br>${nearestStation.name}<br>${nearestStation.address}<br>${nearestStation.distance.toFixed(2)} km<br>${nearestStation.phone}`
-        ).openPopup();
-
-        const route = L.Routing.control({
-          waypoints: [L.latLng(centerLat, centerLng), L.latLng(nearestStation.lat, nearestStation.lng)],
-          lineOptions: {
-            styles: [{ color: "#0288d1", weight: 4, opacity: 0.8 }],
-          },
-          show: true,
-          addWaypoints: false,
-          routeWhileDragging: false,
-          draggableWaypoints: false,
-          fitSelectedRoutes: true,
-          showAlternatives: false,
-          router: L.Routing.osrmv1({
-            serviceUrl: 'https://router.project-osrm.org/route/v1'
-          })
-        }).addTo(map);
-        
-        routingControlsRef.current.push(route);
-      }
-
-      const redZones = await fetchRedZones(centerLat, centerLng);
-      if (redZones.length > 0) {
-        const nearestRedZone = redZones[0];
-        nearestRedZoneMarkerRef.current = L.circle([nearestRedZone.lat, nearestRedZone.lng], {
-          radius: 300,
-          color: '#ff0000',
-          fillColor: '#ff0000',
-          fillOpacity: 0.15,
-        }).addTo(zoneLayer)
-          .bindPopup(`<strong>Nearest Red Zone</strong><br>Type: ${nearestRedZone.type}<br>Distance: ${nearestRedZone.distance.toFixed(2)} km`);
-      }
-    };
-
-    if (manualLocation && !refreshTriggered) {
-      updateMap(manualLocation.lat, manualLocation.lng, true);
-    } else if (userLocation) {
-      updateMap(userLocation.lat, userLocation.lng, false);
+      mapView === 'street' ? streetLayer.addTo(mapInstanceRef.current) : satelliteLayer.addTo(mapInstanceRef.current);
     }
 
     return () => {
-      routingControlsRef.current.forEach((control) => {
-        if (map.hasLayer(control)) map.removeControl(control);
-      });
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
     };
-  }, [userLocation, manualLocation, setPoliceStations, setPlaceDetails, refreshTriggered]);
+  }, [userLocation]);
 
-  return <div ref={mapRef} className="leaflet-map" />;
+  useEffect(() => {
+    if (!mapInstanceRef.current || !userLocation) return;
+    
+    const map = mapInstanceRef.current;
+    map.eachLayer((layer) => {
+      if (layer instanceof L.TileLayer || layer instanceof L.Marker || layer instanceof L.Routing.Control || layer instanceof L.Circle) {
+        map.removeLayer(layer);
+      }
+    });
+
+    const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '© <a href="https://www.esri.com/">Esri</a>',
+      maxZoom: 19,
+    });
+
+    mapView === 'street' ? streetLayer.addTo(map) : satelliteLayer.addTo(map);
+
+    const userMarker = L.marker([userLocation.lat, userLocation.lng], {
+      icon: L.icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+      })
+    }).addTo(map).bindPopup(`
+      Your Location<br>
+      Lat: ${userLocation.lat.toFixed(6)}<br>
+      Lng: ${userLocation.lng.toFixed(6)}
+    `);
+
+    if (daughterLocation) {
+      const daughterMarker = L.marker([daughterLocation.lat, daughterLocation.lng], {
+        icon: L.icon({
+          iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-pink.png',
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+        })
+      }).addTo(map).bindPopup(`
+        Daughter's Location<br>
+        Lat: ${daughterLocation.lat.toFixed(6)}<br>
+        Lng: ${daughterLocation.lng.toFixed(6)}
+      `);
+
+      L.Routing.control({
+        waypoints: [
+          L.latLng(userLocation.lat, userLocation.lng),
+          L.latLng(daughterLocation.lat, daughterLocation.lng)
+        ],
+        lineOptions: { 
+          styles: [{ 
+            color: '#FF69B4',
+            weight: 5,
+            opacity: 0.7 
+          }] 
+        },
+        router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+        show: true,
+        addWaypoints: false,
+        routeWhileDragging: false,
+        fitSelectedRoutes: true,
+        collapsible: true,
+        createMarker: () => null,
+      }).addTo(map);
+    }
+
+    safetyZones.redZones.forEach(zone => {
+      L.circle(zone.center, {
+        color: 'red',
+        fillColor: '#f03',
+        fillOpacity: 0.3,
+        radius: zone.radius
+      }).addTo(map).bindPopup('High Risk Area');
+    });
+
+    safetyZones.blueZones.forEach(zone => {
+      L.circle(zone.center, {
+        color: 'blue',
+        fillColor: '#2196F3',
+        fillOpacity: 0.3,
+        radius: zone.radius
+      }).addTo(map).bindPopup('Safe Area');
+    });
+
+    fetchPoliceStations(userLocation.lat, userLocation.lng).then(stations => {
+      setPoliceStations(stations);
+      if (stations.length > 0) {
+        const policeMarker = L.marker([stations[0].lat, stations[0].lng], {
+          icon: L.divIcon({
+            html: '<div style="color: #FFD700; font-size: 24px;">★</div>',
+            className: 'star-marker',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12],
+          })
+        }).addTo(map).bindPopup(`
+          ${stations[0].name}<br>
+          Lat: ${stations[0].lat.toFixed(6)}<br>
+          Lng: ${stations[0].lng.toFixed(6)}
+        `);
+
+        L.Routing.control({
+          waypoints: [
+            L.latLng(userLocation.lat, userLocation.lng),
+            L.latLng(stations[0].lat, stations[0].lng)
+          ],
+          lineOptions: { 
+            styles: [{ 
+              color: '#4682B4',
+              weight: 5,
+              opacity: 0.7 
+            }] 
+          },
+          router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+          show: true,
+          addWaypoints: false,
+          routeWhileDragging: false,
+          fitSelectedRoutes: true,
+          collapsible: true,
+          createMarker: () => null,
+          routeLine: function(route) {
+            return L.polyline(route.coordinates, {
+              color: '#4682B4',
+              weight: 5,
+              opacity: 0.7
+            });
+          }
+        }).addTo(map);
+      }
+    });
+
+    map.setView([userLocation.lat, userLocation.lng], 14);
+  }, [userLocation, mapView, setPoliceStations, daughterLocation]);
+
+  return (
+    <div ref={mapRef} className="map-container">
+      <div className="view-toggle-box">
+        <button 
+          onClick={() => setMapView(mapView === 'street' ? 'satellite' : 'street')}
+          className={`view-toggle-button ${mapView === 'satellite' ? 'active' : ''}`}
+        >
+          {mapView === 'street' ? 'Satellite' : 'Street'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
-function Loc() {
-  const { location, locationDetails, status, refreshLocation } = useLiveLocation();
-  const [manualLat, setManualLat] = useState("");
-  const [manualLng, setManualLng] = useState("");
-  const [manualLocation, setManualLocation] = useState(null);
-  const [policeStations, setPoliceStations] = useState([]);
-  const [audioAlert, setAudioAlert] = useState(false);
-  const [isFullScreen, setIsFullScreen] = useState(false);
-  const [placeDetails, setPlaceDetails] = useState({ fullAddress: "", details: {} });
-  const [refreshTriggered, setRefreshTriggered] = useState(false);
+function WelcomePage({ onEnter }) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
 
-  const handleManualLocation = async () => {
-    const lat = parseFloat(manualLat);
-    const lng = parseFloat(manualLng);
-    if (!isNaN(lat) && !isNaN(lng)) {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
-      );
-      const data = await response.json();
-      console.log("Manual location set:", { lat, lng, address: data.display_name });
-      setManualLocation({ lat, lng, fullAddress: data.display_name || "Address not available" });
-      setPlaceDetails({ fullAddress: data.display_name, details: data.address || {} });
-      setRefreshTriggered(false);
-      setManualLat("");
-      setManualLng("");
+  const handleSubmit = async () => {
+    if (!name || !role) {
+      alert("Please enter your name and select a role");
+      return;
+    }
+
+    try {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject);
+      });
+      
+      const userData = {
+        name,
+        role,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      };
+
+      const response = await fetch('https://backend-gut6.onrender.com/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userData),
+      });
+
+      if (response.ok) {
+        localStorage.setItem('user', JSON.stringify(userData));
+        document.querySelector('.welcome-page')?.classList.add('zoom-out-3d');
+        setTimeout(() => onEnter(), 1000);
+      }
+    } catch (error) {
+      console.error("Error submitting data:", error);
+      alert("Failed to save data. Please try again.");
     }
   };
 
-  const handleRefresh = () => {
-    refreshLocation();
-    setManualLocation(null);
-    setRefreshTriggered(true);
+  return (
+    <div className="welcome-page">
+      <div className="welcome-content">
+        <Shield size={90} className="welcome-icon" />
+        <h1>Women's Safety Guardian</h1>
+        <p>Empowering Your Safety with Confidence</p>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Enter your name"
+          className="name-input"
+        />
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          className="role-select"
+        >
+          <option value="">Select role</option>
+          <option value="parent">Parent</option>
+          <option value="daughter">Daughter</option>
+        </select>
+        <button onClick={handleSubmit} className="get-started-button">
+          Get Started
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Loc() {
+  const { location, locationDetails, status, refreshLocation, setLocation, setLocationDetails } = useLiveLocation();
+  const [policeStations, setPoliceStations] = useState([]);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [latInput, setLatInput] = useState("");
+  const [lngInput, setLngInput] = useState("");
+  const [showWelcome, setShowWelcome] = useState(true);
+  const [manualLocation, setManualLocation] = useState(null);
+  const [daughterName, setDaughterName] = useState("");
+  const [daughterLocation, setDaughterLocation] = useState(null);
+  const [daughterStatus, setDaughterStatus] = useState("");
+  const navigate = useNavigate();
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+  const updateUserLocation = async () => {
+    if (location && user.name) {
+      try {
+        const response = await fetch('https://backend-gut6.onrender.com/api/users', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: user.name,
+            latitude: location.lat,
+            longitude: location.lng,
+          }),
+        });
+        if (!response.ok) throw new Error('Failed to update location');
+      } catch (error) {
+        console.error("Error updating location:", error);
+      }
+    }
   };
 
-  const calculateTravelTime = (distance, speed) => (distance / speed) * 60;
+  const handleManualLocation = async () => {
+    const lat = parseFloat(latInput);
+    const lng = parseFloat(lngInput);
+    if (!isNaN(lat) && !isNaN(lng)) {
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
+        );
+        const data = await response.json();
+        if (data.display_name) {
+          const newLocation = {
+            lat: lat,
+            lng: lng,
+            accuracy: 0
+          };
+          setLocation(newLocation);
+          setManualLocation(newLocation);
+          setLocationDetails({ fullAddress: data.display_name });
+          setLatInput("");
+          setLngInput("");
+          setStatus("Manual location set");
+          await updateUserLocation();
+        }
+      } catch (error) {
+        console.error("Invalid coordinates:", error);
+        setStatus("Invalid coordinates entered");
+      }
+    }
+  };
+
+  const searchDaughterLocation = async () => {
+    try {
+      const response = await fetch(`https://backend-gut6.onrender.com/api/users/${daughterName}`);
+      const data = await response.json();
+      if (response.ok && data) {
+        setDaughterLocation({ lat: data.latitude, lng: data.longitude });
+        setDaughterStatus(`Found ${daughterName}'s location`);
+      } else {
+        setDaughterLocation(null);
+        setDaughterStatus("Your daughter is not registered in the website");
+      }
+    } catch (error) {
+      console.error("Error searching daughter:", error);
+      setDaughterStatus("Error searching for daughter");
+      setDaughterLocation(null);
+    }
+  };
+
+  const calculateTravelTime = (distanceKm) => ({
+    walk: (distanceKm / 5) * 60,
+    bike: (distanceKm / 15) * 60,
+    bus: (distanceKm / 30) * 60,
+    car: (distanceKm / 40) * 60
+  });
 
   const handleEmergency = () => {
     if (!location) {
       alert("Location not available yet...");
       return;
     }
-
     const nearestStation = policeStations[0];
-    const policeInfo = nearestStation
-      ? `${nearestStation.name}: ${nearestStation.distance.toFixed(2)} km\n` +
-        `Phone: ${nearestStation.phone}\n` +
-        `Car: ${calculateTravelTime(nearestStation.distance, 40).toFixed(1)} min, ` +
-        `Bike: ${calculateTravelTime(nearestStation.distance, 30).toFixed(1)} min, ` +
-        `Walk: ${calculateTravelTime(nearestStation.distance, 5).toFixed(1)} min`
-      : "No nearby police stations detected";
-
-    if (audioAlert) {
-      new Audio("https://www.soundjay.com/buttons/beep-01a.mp3").play().catch(console.error);
-    }
-
-    if (nearestStation) {
-      window.location.href = `tel:${nearestStation.phone}`;
-    }
-
     alert(
       `EMERGENCY ALERT!\n` +
-        `Your Location: ${locationDetails.fullAddress}\n` +
-        `Your Coordinates: ${location?.lat}, ${location?.lng}\n` +
-        `Accuracy: ${Math.round(location?.accuracy || 0)}m\n\n` +
-        `Nearest Police Station (Blue Zone):\n${policeInfo}`
+      `Your Location: ${locationDetails.fullAddress}\n` +
+      `Coordinates: ${location?.lat}, ${location?.lng}\n` +
+      (nearestStation ? 
+        `Nearest Police: ${nearestStation.name}\nDistance: ${(nearestStation.distance * 1000).toFixed(0)} m` : 
+        "No nearby police stations found")
     );
   };
 
-  const safetyTips = [
-    "Avoid the nearest Red Zone",
-    "Seek the nearest Blue Zone (police station) if needed",
-    "Stay aware of your surroundings",
-    "Use well-lit, populated routes",
-    "Trust your intuition",
-  ];
+  useEffect(() => {
+    if (location) updateUserLocation();
+  }, [location]);
+
+  if (showWelcome) {
+    return (
+      <WelcomePage 
+        onEnter={() => setShowWelcome(false)} 
+      />
+    );
+  }
+
+  if (!location) {
+    return <div>Loading location...</div>;
+  }
 
   return (
-    <div className="loc-page">
+    <div className="loc-page zoom-in-3d">
+      <header className="header glass-effect">
+        <div className="header-content">
+          <button onClick={() => navigate("/")} className="home-button">
+            Home
+          </button>
+          <h1><Shield size={26} /> Women's Safety Guardian</h1>
+          <button onClick={refreshLocation} className="location-button">
+            <RefreshCw size={20} /> Refresh
+          </button>
+        </div>
+      </header>
 
+      <div className="main-content">
+        <section className={`map-section ${isFullScreen ? "fullscreen" : ""}`}>
+          <MapComponent
+            userLocation={location}
+            policeStations={policeStations}
+            setPoliceStations={setPoliceStations}
+            manualLocation={manualLocation}
+            daughterLocation={daughterLocation}
+            setDaughterLocation={setDaughterLocation}
+          />
+          <button onClick={() => setIsFullScreen(!isFullScreen)} className="fullscreen-toggle">
+            <Map size={20} /> {isFullScreen ? "Exit" : "Fullscreen"}
+          </button>
+        </section>
 
-      <div className="container">
-        <header className="header glass-effect">
-          <h1>
-            <Shield size={32} /> Women's Safety Guardian
-          </h1>
-          <p>Protecting You Always</p>
-          <a href="/" className="home-button">
-            <span>Home</span>
-          </a>
-        </header>
+        <div className={`info-panel ${isFullScreen ? 'hidden' : ''} glass-effect`}>
+          <div className="input-container fade-in">
+            <input
+              type="number"
+              value={latInput}
+              onChange={(e) => setLatInput(e.target.value)}
+              placeholder="Latitude"
+              className="coord-input"
+            />
+            <input
+              type="number"
+              value={lngInput}
+              onChange={(e) => setLngInput(e.target.value)}
+              placeholder="Longitude"
+              className="coord-input"
+            />
+            <button onClick={handleManualLocation} className="search-button">
+              <Search size={20} /> Set Location
+            </button>
+          </div>
 
-        <main className="main-content">
-          {!isFullScreen && (
-            <section className="form-section glass-effect">
-              <div className="location-display">
-                <h3>{manualLocation && !refreshTriggered ? "Searched Location" : "Your Live Location"}</h3>
-                <p><strong>Address:</strong> {locationDetails.fullAddress}</p>
-                <p>
-                  <strong>Coordinates:</strong> 
-                  {(manualLocation && !refreshTriggered) 
-                    ? `${manualLocation.lat.toFixed(6)}, ${manualLocation.lng.toFixed(6)}`
-                    : `${location?.lat?.toFixed(6)}, ${location?.lng?.toFixed(6)}`}
-                </p>
-                <p><strong>Details:</strong></p>
-                <ul>
-                  {Object.entries(placeDetails.details).map(([key, value]) => (
-                    <li key={key}><strong>{key}:</strong> {value}</li>
-                  ))}
-                </ul>
-                <p className="status-text"><Info size={16} /> {status}</p>
-                <button onClick={handleRefresh} className="location-button">
-                  <RefreshCw size={20} /> Return to My Live Location
-                </button>
-                {policeStations.length > 0 && (
-                  <div className="police-info">
-                    <p><strong>Nearest Police Station (Blue Zone):</strong></p>
-                    <div className="police-station">
-                      <Shield size={16} /> <strong>{policeStations[0].name}</strong><br />
-                      Distance: {policeStations[0].distance.toFixed(2)} km<br />
-                      Phone: {policeStations[0].phone}<br />
-                      Address: {policeStations[0].address}<br />
-                      Car: {calculateTravelTime(policeStations[0].distance, 40).toFixed(1)} min<br />
-                      Bike: {calculateTravelTime(policeStations[0].distance, 30).toFixed(1)} min<br />
-                      Walk: {calculateTravelTime(policeStations[0].distance, 5).toFixed(1)} min
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="form-group">
-                <label><Search size={20} /> Search Location</label>
-                <div className="coordinates-input">
-                  <input
-                    type="number"
-                    value={manualLat}
-                    onChange={(e) => setManualLat(e.target.value)}
-                    placeholder="Latitude"
-                    step="any"
-                  />
-                  <input
-                    type="number"
-                    value={manualLng}
-                    onChange={(e) => setManualLng(e.target.value)}
-                    placeholder="Longitude"
-                    step="any"
-                  />
-                </div>
-                <button onClick={handleManualLocation} className="location-button">
-                  <Search size={20} /> Go to Location
-                </button>
-              </div>
-
-              <div className="safety-features">
-                <button
-                  onClick={() => setAudioAlert(!audioAlert)}
-                  className={`location-button ${audioAlert ? "active" : ""}`}
-                >
-                  <Volume2 size={20} /> {audioAlert ? "Disable Alert" : "Enable Alert"}
-                </button>
-                <div className="safety-tips glass-effect">
-                  <h3>Safety Tips</h3>
-                  <div className="tips-list">
-                    {safetyTips.map((tip, index) => (
-                      <div key={index} className="tip-item">
-                        <CheckCircle size={16} /> {tip}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <button onClick={handleEmergency} className="emergency-button sos">
-                <AlertCircle size={24} /> EMERGENCY SOS
+          {user.role === 'parent' && (
+            <div className="input-container fade-in">
+              <input
+                type="text"
+                value={daughterName}
+                onChange={(e) => setDaughterName(e.target.value)}
+                placeholder="Enter your daughter's name"
+                className="coord-input"
+              />
+              <button onClick={searchDaughterLocation} className="search-button">
+                <Search size={20} /> Search Location
               </button>
-            </section>
+              {daughterStatus && <p>{daughterStatus}</p>}
+            </div>
+          )}
+          </div>
+
+          <div className="info-box fade-in">
+            <h3>Your Location</h3>
+            <p><strong>Address:</strong> {locationDetails.fullAddress}</p>
+            <p><strong>Coordinates:</strong> {location?.lat?.toFixed(6)}, {location?.lng?.toFixed(6)}</p>
+            <p><strong>Status:</strong> <Info size={16} /> {status}</p>
+          </div>
+
+          {policeStations[0] && (
+            <div className="info-box fade-in">
+              <h3>Nearest Police Station</h3>
+              <p><strong>Name:</strong> {policeStations[0].name}</p>
+              <p><strong>Address:</strong> {policeStations[0].address}</p>
+              <p><strong>Distance:</strong> {(policeStations[0].distance * 1000).toFixed(0)} m</p>
+              <div className="travel-times">
+                {Object.entries(calculateTravelTime(policeStations[0].distance)).map(([mode, time]) => (
+                  <p key={mode}>
+                    <strong>{mode.charAt(0).toUpperCase() + mode.slice(1)}:</strong> {time.toFixed(1)} min
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
 
-          <section className={`map-section ${isFullScreen ? "fullscreen" : ""}`}>
-            <MapComponent
-              userLocation={location}
-              manualLocation={manualLocation}
-              policeStations={policeStations}
-              setPoliceStations={setPoliceStations}
-              setPlaceDetails={setPlaceDetails}
-              refreshTriggered={refreshTriggered}
-            />
-            <div className="map-buttons">
-              <button 
-                onClick={() => setIsFullScreen(!isFullScreen)} 
-                className="fullscreen-toggle location-button"
-              >
-                <Map size={20} /> {isFullScreen ? "Exit Fullscreen" : "Fullscreen Map"}
-              </button>
-            </div>
-          </section>
-        </main>
+          {user.role !== 'parent' && (
+            <button onClick={handleEmergency} className="emergency-button fade-in">
+              <AlertCircle size={22} /> Emergency SOS
+            </button>
+          )}
+        </div>
       </div>
-    </div>
   );
 }
 
