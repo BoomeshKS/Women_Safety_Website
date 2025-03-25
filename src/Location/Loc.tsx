@@ -346,22 +346,24 @@ function WelcomePage({ onEnter }) {
         <Shield size={90} className="welcome-icon" />
         <h1>Women's Safety Guardian</h1>
         <p>Empowering Your Safety with Confidence</p>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Enter your name"
-          className="name-input"
-        />
-        <select
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="role-select"
-        >
-          <option value="">Select role</option>
-          <option value="parent">Parent</option>
-          <option value="daughter">Daughter</option>
-        </select>
+        <div className="wel">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Enter your name"
+            className="name-input"
+          />
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="role-select"
+          >
+            <option value="">Select role</option>
+            <option value="parent">Parent</option>
+            <option value="daughter">Daughter</option>
+          </select>
+        </div>
         <button onClick={handleSubmit} className="get-started-button">
           Get Started
         </button>
